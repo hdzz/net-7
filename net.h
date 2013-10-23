@@ -57,7 +57,7 @@ NET_API bool CreateTcpLink(NetInterface* callback, const char* ip, int port, Tcp
 NET_API bool DestroyTcpLink(TcpLink link);
 
 // 监听一个TCP链接：Accept上来的链接与被监听的链接具有相同属性
-NET_API bool Listen(TcpLink link);
+NET_API bool Listen(TcpLink link, int backlog);
 
 // 连接到对端：连接并建立一条新的TCP链接
 NET_API bool Connect(TcpLink link, const char* ip, int port);

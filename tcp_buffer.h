@@ -11,9 +11,9 @@ const int kTcpBufferSize = 64 * 1024;
 class TcpSendBuff : public BaseBuffer {
  public:
 	TcpSendBuff() {}
-	bool set_buffer(const char* buffer, int offset, int size) {
+	bool set_buffer(int offset, const char* buffer, int size) {
     auto total_size = size + offset;
-		if (total_size > sizeof(buffer_)) {
+		if (buffer == nullptr || total_size > sizeof(buffer_)) {
 			return false;
 		}
     auto current_pos = buffer_ + offset;
@@ -46,19 +46,19 @@ class AcceptBuff : public BaseBuffer {
 	const char* buffer() { return buffer_; }
 	unsigned long accept_link() { return accept_link_; }
 	void set_accept_link(unsigned long value) { accept_link_ = value; }
-	SOCKET accept_socket() { return accept_socket_; }
-	void set_accept_socket(SOCKET value) { accept_socket_ = value; }
+	void* accept_socket() { return accept_socket_; }
+	void set_accept_socket(void* value) { accept_socket_ = value; }
 	void ResetBuffer() {
 		BaseBuffer::ResetBuffer();
 		buffer_size_ = sizeof(buffer_);
 		accept_link_ = ~0;
-		accept_socket_ = INVALID_SOCKET;
+		accept_socket_ = nullptr;
 	}
 
  private:
 	char buffer_[kAcceptBuffSize];
 	unsigned long accept_link_;
-	SOCKET accept_socket_;
+	void* accept_socket_;
 };
 
 } // namespace net

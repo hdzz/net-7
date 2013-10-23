@@ -1,56 +1,16 @@
 #include "res_manager.h"
-#include "tcp_buff_helper.h"
+#include <cassert>
 
 namespace net {
 
-ResManager::ResManager() { ResetMember(); }
-
-ResManager::~ResManager() { CleanupNet(); }
-
-void ResManager::ResetMember() {
-	is_net_started_ = false;
-	each_link_async_num_ = 0;
-	tcp_link_count_ = 0;
-	iocp_ = NULL;
+ResManager::ResManager() {
+  is_net_started_ = false;
+  tcp_link_count_ = 0;
+  iocp_ = NULL;
 }
 
-bool ResManager::InitMemoryPool() {
-	for (int i=0; i<kSendBufferNum; ++i) {
-		auto send_buffer = new TcpSendBuff;
-		tcp_send_buff_.push_back(send_buffer);
-	}
-	for (int i=0; i<kRecvBufferNum; ++i) {
-		auto recv_buffer = new TcpRecvBuff;
-		tcp_recv_buff_.push_back(recv_buffer);
-	}
-	for (int i=0; i<kAcceptBufferNum; ++i) {
-		auto accept_buffer = new AcceptBuff;
-		accept_buff_.push_back(accept_buffer);
-	}
-	return true;
-}
-
-void ResManager::ClearMemoryPool() {
-	do {
-		ThreadLock<CriticalSection> lock(tcp_link_lock_);
-		for (auto i : tcp_link_) { delete i.second; }
-		tcp_link_.clear();
-	} while (false);
-	do {
-		ThreadLock<CriticalSection> lock(tcp_send_buff_lock_);
-		for (auto i : tcp_send_buff_) { delete i; }
-		tcp_send_buff_.clear();
-	} while (false);
-	do {
-		ThreadLock<CriticalSection> lock(tcp_recv_buff_lock_);
-		for (auto i : tcp_recv_buff_) { delete i; }
-		tcp_recv_buff_.clear();
-	} while (false);
-	do {
-		ThreadLock<CriticalSection> lock(accept_buff_lock_);
-		for (auto i : accept_buff_) { delete i; }
-		accept_buff_.clear();
-	} while (false);
+ResManager::~ResManager() {
+  CleanupNet();
 }
 
 bool ResManager::StartupNet(StartupType type) {
@@ -58,29 +18,25 @@ bool ResManager::StartupNet(StartupType type) {
 		return true;
 	}
 	WSAData data;
-	if (WSAStartup(MAKEWORD(2,2), &data) != 0) {
+	if (::WSAStartup(MAKEWORD(2,2), &data) != 0) {
 		return false;
 	}
-	if (!InitMemoryPool()) {
+  is_net_started_ = true;
+	if (!tcp_buff_pool_.Init()) {
+    CleanupNet();
 		return false;
 	}
 	iocp_ = ::CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 0);
 	if (iocp_ == NULL) {
-		ClearMemoryPool();
+		CleanupNet();
 		return false;
 	}
-	is_net_started_ = true;
-	int thread_num = GetProcessorNum() * 2;
-	worker_thread_.reserve(thread_num);
-	for (int i=0; i<thread_num; ++i) {
-		HANDLE worker_thread = ::CreateThread(NULL, 0, IocpWorkerThread, this, 0, NULL);
-		if (worker_thread == NULL) {
-			CleanupNet();
-			return false;
-		}
-		worker_thread_.push_back(worker_thread);
+	auto thread_num = GetProcessorNum() * 2;
+	for (auto i=0; i<thread_num; ++i) {
+		auto thread_proc = std::bind(&ResManager::IocpWorker, this);
+    auto new_thread = new std::thread(thread_proc);
+		iocp_thread_.push_back(new_thread);
 	}
-	each_link_async_num_ = thread_num;
 	return true;
 }
 
@@ -88,22 +44,31 @@ bool ResManager::CleanupNet() {
 	if (!is_net_started_) {
 		return true;
 	}
-	for (auto i : worker_thread_) {
+	for (const auto& i : iocp_thread_) {
 		::PostQueuedCompletionStatus(iocp_, 0, NULL, NULL);
 	}
-	::WaitForMultipleObjects(worker_thread_.size(), &worker_thread_[0], TRUE, INFINITE);
-	for (auto i: worker_thread_) {
-		::CloseHandle(i);
-	}
-	worker_thread_.clear();
-	::CloseHandle(iocp_);
-	ClearMemoryPool();
-	ResetMember();
-	WSACleanup();
+  for (auto& i : iocp_thread_) {
+    i->join();
+    delete i;
+  }
+	iocp_thread_.clear();
+  do {
+    std::lock_guard<std::mutex> lock(tcp_link_lock_);
+    for (const auto& i : tcp_link_) {
+      delete i.second;
+    }
+    tcp_link_.clear();
+  } while (false);
+  tcp_buff_pool_.Clear();
+  ::CloseHandle(iocp_);
+  iocp_ = NULL;
+  ::WSACleanup();
+  tcp_link_count_ = 0;
+  is_net_started_ = false;
 	return true;
 }
 
-bool ResManager::CreateTcpLink(NetInterface* callback, TcpLink& new_link, const char* ip, int port) {
+bool ResManager::CreateTcpLink(NetInterface* callback, const char* ip, int port, TcpLink& new_link) {
 	if (callback == nullptr) {
 		return false;
 	}
@@ -112,6 +77,9 @@ bool ResManager::CreateTcpLink(NetInterface* callback, TcpLink& new_link, const 
 		delete new_socket;
 		return false;
 	}
+  if (!ip) {
+    ip = "0.0.0.0";
+  }
 	if (!new_socket->Bind(ip, port)) {
 		delete new_socket;
 		return false;
@@ -128,15 +96,18 @@ bool ResManager::DestroyTcpLink(TcpLink link) {
 	return RemoveTcpLink(link);
 }
 
-bool ResManager::Listen(TcpLink link) {
+bool ResManager::Listen(TcpLink link, int backlog) {
 	auto find_socket = FindTcpSocket(link);
 	if (find_socket == nullptr) {
 		return false;
 	}
-	if (!find_socket->Listen()) {
+  if (backlog > kAcceptBuffPoolSize) {
+    backlog = kAcceptBuffPoolSize;
+  }
+	if (!find_socket->Listen(backlog)) {
 		return false;
 	}
-	return AsyncMoreAccept(link, find_socket);
+	return AsyncMoreAccept(link, find_socket, backlog);
 }
 
 bool ResManager::Connect(TcpLink link, const char* ip, int port) {
@@ -147,7 +118,11 @@ bool ResManager::Connect(TcpLink link, const char* ip, int port) {
 	if (!find_socket->Connect(ip, port)) {
 		return false;
 	}
-	return AsyncMoreTcpRecv(link, find_socket);
+  auto buffer = tcp_buff_pool_.GetRecvBuffer();
+  if (buffer == nullptr) {
+    return false;
+  }
+	return AsyncTcpRecv(link, find_socket, buffer);
 }
 
 bool ResManager::SendTcpPacket(TcpLink link, const char* packet, int size) {
@@ -158,45 +133,36 @@ bool ResManager::SendTcpPacket(TcpLink link, const char* packet, int size) {
 	if (find_socket == nullptr) {
 		return false;
 	}
-	vector<TcpSendBuff*> buffer;
-	int buffer_num = CalcSendBuffNum(size);
-	if (!GetAllTcpSendBuff(buffer, buffer_num)) {
-		return false;
-	}
-	int packet_count = find_socket->attribute().AddPacketCount();
-	FillTcpSendBuff(packet_count, packet, size, buffer);
-	for (auto i : buffer) {
+	auto buffer = tcp_buff_pool_.GetSendBuffer(packet, size);
+	for (auto& i : buffer) {
 		i->set_link(link);
 		i->set_socket(find_socket);
 		i->set_async_type(kAsyncTypeTcpSend);
 		if (!find_socket->AsyncSend(const_cast<char*>(i->buffer()), i->buffer_size(), (LPOVERLAPPED)i)) {
-				ReturnTcpSendBuff(i);
+				tcp_buff_pool_.ReturnTcpSendBuff(i);
 				return false;
 		}
 	}
 	return true;
 }
 
-bool ResManager::GetTcpLinkAddr(TcpLink link, EitherPeer type, char* ip, int ip_size, int& port) {
-	if (ip == nullptr || ip_size == 0) {
+bool ResManager::GetTcpLinkAddr(TcpLink link, EitherPeer type, char ip[16], int& port) {
+	if (ip == nullptr) {
 		return false;
 	}
 	auto find_socket = FindTcpSocket(link);
 	if (find_socket == nullptr) {
 		return false;
 	}
-	string ip_string;
-	if (type == EitherPeer::kLocal) {
-		find_socket->attribute().GetLocalAddr(ip_string, port);
-	} else if (type == EitherPeer::kRemote) {
-		find_socket->attribute().GetRemoteAddr(ip_string, port);
-	} else {
-		return false;
-	}
-	if (ip_size <= static_cast<int>(ip_string.size())) {
-		return false;
-	}
-	strcpy_s(ip, ip_size, ip_string.c_str());
+  std::string ip_string;
+  if (type == EitherPeer::kLocal) {
+    find_socket->attribute().GetLocalAddr(ip_string, port);
+  } else if (type == EitherPeer::kRemote) {
+    find_socket->attribute().GetRemoteAddr(ip_string, port);
+  } else {
+    return false;
+  }
+  strcpy_s(ip, 16, ip_string.c_str());
 	return true;
 }
 
@@ -208,19 +174,19 @@ bool ResManager::SetTcpLinkAttr(TcpLink link, AttributeType type, int value) {
 bool ResManager::GetTcpLinkAttr(TcpLink link, AttributeType type, int& value) {
 	auto find_socket = FindTcpSocket(link);
 	if (find_socket == nullptr) {
-		return false;
-	}
-	if (type == AttributeType::kSendSpeed) {
-		value = find_socket->attribute().GetSendSpeed();
-	} else if (type == AttributeType::kRecvSpeed) {
-		value = find_socket->attribute().GetRecvSpeed();
-	} else {
-		return false;
-	}
+    return false;
+  }
+  if (type == AttributeType::kSendSpeed) {
+    value = find_socket->attribute().GetSendSpeed();
+  } else if (type == AttributeType::kRecvSpeed) {
+    value = find_socket->attribute().GetRecvSpeed();
+  } else {
+    return false;
+  }
 	return true;
 }
 
-bool ResManager::CreateUdpLink(NetInterface* callback, UdpLink& new_link, const char* ip, int port, bool broadcast) {
+bool ResManager::CreateUdpLink(NetInterface* callback, const char* ip, int port, bool broadcast, UdpLink& new_link) {
 
 	return true;
 }
@@ -250,14 +216,14 @@ bool ResManager::BindToIOCP(TcpSocket* socket) {
 }
 
 TcpLink ResManager::AddTcpLink(TcpSocket* socket) {
-	ThreadLock<CriticalSection> lock(tcp_link_lock_);
+	std::lock_guard<std::mutex> lock(tcp_link_lock_);
 	TcpLink new_link = ++tcp_link_count_;
-	tcp_link_.insert(make_pair(new_link, socket));
+	tcp_link_.insert(std::make_pair(new_link, socket));
 	return new_link;
 }
 
 bool ResManager::RemoveTcpLink(TcpLink link) {
-	ThreadLock<CriticalSection> lock(tcp_link_lock_);
+	std::lock_guard<std::mutex> lock(tcp_link_lock_);
 	auto find_link = tcp_link_.find(link);
 	if (find_link == tcp_link_.end()) {
 		return false;
@@ -269,7 +235,7 @@ bool ResManager::RemoveTcpLink(TcpLink link) {
 }
 
 TcpSocket* ResManager::FindTcpSocket(TcpLink link) {
-	ThreadLock<CriticalSection> lock(tcp_link_lock_);
+	std::lock_guard<std::mutex> lock(tcp_link_lock_);
 	auto find_link = tcp_link_.find(link);
 	if (find_link == tcp_link_.end()) {
 		return nullptr;
@@ -277,35 +243,15 @@ TcpSocket* ResManager::FindTcpSocket(TcpLink link) {
 	return find_link->second;
 }
 
-bool ResManager::GetAllTcpSendBuff(vector<TcpSendBuff*>& buffer, int buffer_num) {
-	buffer.reserve(buffer_num);
-	bool is_buff_enough = true;
-	for (int i=0; i<buffer_num; ++i) {
-		auto send_buffer = GetTcpSendBuffer();
-		if (send_buffer == nullptr) {
-			is_buff_enough = false;
-			break;
-		}
-		buffer.push_back(send_buffer);
-	}
-	if (!is_buff_enough) {
-		for (auto i : buffer) {
-			ReturnTcpSendBuff(i);
-		}
-		buffer.clear();
-	}
-	return is_buff_enough;
-}
-
-bool ResManager::AsyncMoreAccept(TcpLink link, TcpSocket* socket) {
-	bool is_success = false;
-	for (int i=0; i<each_link_async_num_; ++i) {
-		auto accept_buffer = GetAcceptBuffer();
+bool ResManager::AsyncMoreAccept(TcpLink link, TcpSocket* socket, int count) {
+	auto is_success = false;
+	for (auto i=0; i<count; ++i) {
+		auto accept_buffer = tcp_buff_pool_.GetAcceptBuffer();
 		if (accept_buffer == nullptr) {
 			continue;
 		}
 		if (!AsyncAccept(link, socket, accept_buffer)) {
-			ReturnAcceptBuff(accept_buffer);
+			tcp_buff_pool_.ReturnAcceptBuff(accept_buffer);
 			continue;
 		}
 		is_success = true;
@@ -325,27 +271,12 @@ bool ResManager::AsyncAccept(TcpLink link, TcpSocket* socket, AcceptBuff* buffer
 	buffer->set_accept_link(accept_link);
 	buffer->set_accept_socket(accept_socket);
 	buffer->set_async_type(kAsyncTypeAccept);
-	if (!accept_socket->AsyncAccept(socket->socket(), (PVOID)buffer->buffer(), (LPOVERLAPPED)buffer)) {
+	if (!accept_socket->AsyncAccept(socket->socket(), const_cast<char*>(buffer->buffer()), (LPOVERLAPPED)buffer)) {
 		return false;
 	}
 	return true;
 }
 
-bool ResManager::AsyncMoreTcpRecv(TcpLink link, TcpSocket* socket) {
-	bool is_success = false;
-	for (int i=0; i<each_link_async_num_; ++i) {
-		auto recv_buffer = GetTcpRecvBuffer();
-		if (recv_buffer == nullptr) {
-			continue;
-		}
-		if (!AsyncTcpRecv(link, socket, recv_buffer)) {
-			ReturnTcpRecvBuff(recv_buffer);
-			continue;
-		}
-		is_success = true;
-	}
-	return is_success;
-}
 
 bool ResManager::AsyncTcpRecv(TcpLink link, TcpSocket* socket, TcpRecvBuff* buffer) {
 	buffer->set_link(link);
@@ -355,16 +286,6 @@ bool ResManager::AsyncTcpRecv(TcpLink link, TcpSocket* socket, TcpRecvBuff* buff
 		return false;
 	}
 	return true;
-}
-
-
-
-DWORD WINAPI ResManager::IocpWorkerThread(LPVOID parameter) {
-	ResManager* manager = (ResManager*)parameter;
-	if (manager != nullptr) {
-		manager->IocpWorker();
-	}
-	return 0;
 }
 
 bool ResManager::IocpWorker() {
@@ -386,7 +307,7 @@ bool ResManager::IocpWorker() {
 
 bool ResManager::TransferAsyncType(BaseBuffer* async_buffer, int transfer_size) {
 	switch (async_buffer->async_type()) {
-	case kAsyncTypeAccept:
+  case kAsyncTypeAccept:
 		return OnTcpLinkAccept((AcceptBuff*)async_buffer, transfer_size);
 	case kAsyncTypeTcpSend:
 		return OnTcpLinkSend((TcpSendBuff*)async_buffer, transfer_size);
@@ -409,111 +330,116 @@ bool ResManager::OnTcpLinkAccept(AcceptBuff* buffer, int accept_size) {
 	accept_socket->SetAccepted();
 	buffer->ResetBuffer();
 	AsyncAccept(listen_link, listen_socket, buffer);
-	NetInterface* callback = accept_socket->callback();
-	callback->OnTcpLinkAccept(listen_link, accept_link);
+	auto callback = accept_socket->callback();
+	callback->OnTcpLinkAccepted(listen_link, accept_link);
 	BindToIOCP(accept_socket);
-	return AsyncMoreTcpRecv(accept_link, accept_socket);
+  auto recv_buffer = tcp_buff_pool_.GetRecvBuffer();
+  if (recv_buffer == nullptr) {
+    return false;
+  }
+	return AsyncTcpRecv(accept_link, accept_socket, recv_buffer);
 }
 
 bool ResManager::OnTcpLinkSend(TcpSendBuff* buffer, int send_size) {
-	if (buffer->buffer_size() != send_size) {
-		// 由于系统发送缓冲已经被设置为0，所以发送必定是完全的，这种情况理论上是不存在的
-	}
+	assert(buffer->buffer_size() == send_size);
 	auto send_socket = (TcpSocket*)buffer->socket();
 	send_socket->attribute().AddSendByte(send_size);
-	ReturnTcpSendBuff(buffer);
+	tcp_buff_pool_.ReturnTcpSendBuff(buffer);
 	return true;
 }
 
 bool ResManager::OnTcpLinkRecv(TcpRecvBuff* buffer, int recv_size) {
+  auto recv_link = buffer->link();
 	auto recv_socket = (TcpSocket*)buffer->socket();
 	TcpSocketAttr& attribute = recv_socket->attribute();
 	attribute.AddRecvByte(recv_size);
 	auto callback = recv_socket->callback();
 	auto recv_buff = buffer->buffer();
-	int deal_size = 0;				// 已处理完多少接收缓冲的数据量
-	int left_size = recv_size;// 未处理完多少接收缓冲数据量
-	vector<TcpRecvingPkt*> callback_packet;	// 所有接收完全的发送包
-
-	do {
-		ThreadLock<CriticalSection> lock(attribute.recv_lock_);
-		while (left_size > 0) {// while循环找到每个发送缓冲（或完整或不完整，但起码具备开头或者结尾）
-			const char* each_buff = nullptr;	// 每个缓冲
-			int each_buff_size = 0;						// 每个缓冲大小
-			TcpRecvingPkt* packet = nullptr;	// 每个缓冲对应的包对象
-			if (attribute.last_recv_buff_ == -1) {// 新的发送缓冲，然后需要关心的是该缓冲完没完
-				// 拷贝TCP缓冲头
-				TcpBuffHead head;
-				memcpy(&head, recv_buff+deal_size, kTcpBuffHeadSize);
-				// 该缓冲开始指针
-				each_buff = recv_buff + deal_size + kTcpBuffHeadSize;
-				// 找此缓冲对应的包对象
-				packet = attribute.GetRecvingPkt(head.sequence_, head.total_buff_);
-				// 包中最后一个缓冲
-				if (head.total_buff_ == head.this_buff_ + 1) {
-					packet->packet_size_ = (head.total_buff_-1) * 65528;
-					packet->packet_size_ += head.data_size_;
-				}
-				// 计算此缓冲在发送时的大小
-				int tail_size = kTcpBuffHeadSize - (head.data_size_ % kTcpBuffHeadSize);
-				if (tail_size == kTcpBuffHeadSize) {
-					tail_size = 0;
-				}
-				const int send_buff_size = kTcpBuffHeadSize + head.data_size_ + tail_size;
-				if (send_buff_size <= left_size) {
-					// 该缓冲接收完毕
-					each_buff_size = head.data_size_;
-					bool is_pkt_recv_done = packet->CopyBuffer(each_buff, each_buff_size, true, true, head.this_buff_);
-					if (is_pkt_recv_done) {// 该包接收完毕
-						callback_packet.push_back(packet);
-						attribute.recving_pkt_.erase(attribute.recving_pkt_.find(head.sequence_));
-					}
-					deal_size += send_buff_size;
-					left_size -= send_buff_size;
-				} else {
-					// 该缓冲还有部分未接收
-					each_buff_size = left_size - kTcpBuffHeadSize;
-					packet->CopyBuffer(each_buff, each_buff_size, false, true, head.this_buff_);
-					packet->incomplete_offset_ = head.this_buff_ * 65528  + each_buff_size;
-					packet->incomplete_left_ = head.data_size_ - each_buff_size;
-					left_size = 0;
-					attribute.last_recv_pkt_ = head.sequence_;
-					attribute.last_recv_buff_ = head.this_buff_;
-				}
-			} else {// 遗留有上一个发送缓冲的数据
-				packet = attribute.recving_pkt_.find((int)attribute.last_recv_pkt_)->second;
-				each_buff = recv_buff;
-				if (packet->incomplete_left_ > recv_size) {// 仍然未接收完
-					each_buff_size = recv_size;
-					packet->CopyBuffer(each_buff, each_buff_size, false, false, attribute.last_recv_buff_);
-					packet->incomplete_offset_ += each_buff_size;
-					packet->incomplete_left_ -= each_buff_size;
-					left_size = 0;
-				} else {// 终于接收完毕了
-					each_buff_size = packet->incomplete_left_;
-					bool is_pkt_recv_done = packet->CopyBuffer(each_buff, each_buff_size, true, false, attribute.last_recv_buff_);
-					if (is_pkt_recv_done) {// 该包接收完毕
-						callback_packet.push_back(packet);
-						attribute.recving_pkt_.erase(attribute.recving_pkt_.find((int)attribute.last_recv_pkt_));
-					}
-					int tail_size = kTcpBuffHeadSize - (each_buff_size % kTcpBuffHeadSize);
-					if (tail_size == kTcpBuffHeadSize) {
-						tail_size = 0;
-					}
-					const int left_send_size = each_buff_size + tail_size;
-					deal_size += left_send_size;
-					left_size -= left_send_size;
-					attribute.last_recv_buff_ = -1;
-				}
-			}
-		}
-	} while (false);
-	for (auto i : callback_packet) {
-		callback->OnTcpLinkRecv(buffer->link(), i->packet_, i->packet_size_);
-		delete i;
-	}
-	ReturnTcpRecvBuff(buffer);
+  auto total_dealed = 0;
+  while (total_dealed < recv_size) {
+    auto current_dealed = 0;
+    if (!ParseHeader(recv_socket, &recv_buff[total_dealed], recv_size - total_dealed, current_dealed)) {
+      break;  // 剩下的流里面连一个TCP头都不完整，跳出循环
+    }
+    total_dealed += current_dealed; // 统计处理了多少
+    current_dealed = 0;
+    if (!ParsePacket(recv_socket, &recv_buff[total_dealed], recv_size - total_dealed, current_dealed)) {
+      break;  // 剩下的流里面是个不完整的包，跳出循环
+    }
+    total_dealed += current_dealed; // 统计处理了多少
+  }
+  AsyncTcpRecv(recv_link, recv_socket, buffer);  // 继续投递接收块
+  auto& all_packet = recv_socket->all_packets();
+  for (const auto& i : all_packet) {// 回调
+    callback->OnTcpLinkReceived(recv_link, &i[0], i.size());
+  }
+  all_packet.clear();
 	return true;
+}
+
+unsigned int ResManager::GetPacketSize(TcpSocket* recv_sock) {
+  unsigned int packet_size = 0;
+  const auto& header = recv_sock->current_header();
+  if (header.size() == kTcpHeadSize) {
+    memcpy_s(&packet_size, sizeof(packet_size), &header[4], 4);
+  }
+  return packet_size;
+}
+
+bool ResManager::ParseHeader(TcpSocket* recv_sock, const char* data, int size, int& dealed_size) {
+  if (data == nullptr || size == 0) {
+    return false;
+  }
+  auto& header = recv_sock->current_header();
+  auto& packet = recv_sock->current_packet();
+  if (header.size() < kTcpHeadSize) {// 还在处理TCP头
+    int left_header_size = kTcpHeadSize - header.size();  // TCP头还欠多少没收完
+    if (left_header_size > size) {// 剩余的流中也不够填满TCP头，返回失败
+      for (auto i = 0; i< size; ++i) {
+        header.push_back(data[i]);
+      }
+      dealed_size = size;
+      return false;
+    } else {// 剩余的流中足够填满TCP头，返回成功
+      for (auto i = 0; i< left_header_size; ++i) {
+        header.push_back(data[i]);
+      }
+      dealed_size = left_header_size;
+      packet.clear();  // 完整接收到TCP头，开始了一个新包，原包清零
+      packet.reserve(GetPacketSize(recv_sock));
+      return true;
+    }
+  }
+  return true;
+}
+
+bool ResManager::ParsePacket(TcpSocket* recv_sock, const char* data, int size, int& dealed_size) {
+  if (data == nullptr || size == 0) {
+    return false;
+  }
+  auto packet_size = GetPacketSize(recv_sock);
+  auto& header = recv_sock->current_header();
+  auto& packet = recv_sock->current_packet();
+  auto& all_packets = recv_sock->all_packets();
+  if (packet.size() < packet_size) {// 还在处理一个包
+    int left_packet_size = packet_size - packet.size();  // 包还欠多少没收完
+    if (left_packet_size > size) {// 剩余的流中也不够填满这个包，返回失败
+      for (auto i = 0; i< size; ++i) {
+        packet.push_back(data[i]);
+      }
+      dealed_size = size;
+      return false;
+    } else {
+      for (auto i = 0; i< left_packet_size; ++i) {
+        packet.push_back(data[i]);
+      }
+      dealed_size = left_packet_size;
+      all_packets.push_back(std::move(packet));
+      header.clear();  // 完整接收到一个包，开始下一个TCP头，原TCP头清零
+      return true;
+    }
+  }
+  return true;
 }
 
 bool ResManager::OnUdpLinkSend(BaseBuffer* buffer, int send_size) {

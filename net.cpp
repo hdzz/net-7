@@ -23,8 +23,8 @@ NET_API bool CreateTcpLink(NetInterface* callback, const char* ip, int port, Tcp
 NET_API bool DestroyTcpLink(TcpLink link) {
 	return SingleResMgr::GetInstance()->DestroyTcpLink(link);
 }
-NET_API bool Listen(TcpLink link) {
-	return SingleResMgr::GetInstance()->Listen(link);
+NET_API bool Listen(TcpLink link, int backlog) {
+	return SingleResMgr::GetInstance()->Listen(link, backlog);
 }
 NET_API bool Connect(TcpLink link, const char* ip, int port) {
 	return SingleResMgr::GetInstance()->Connect(link, ip, port);

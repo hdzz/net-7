@@ -3,12 +3,16 @@
 #pragma comment(lib, "Ws2_32.lib")
 #pragma comment(lib, "Mswsock.lib")
 
+namespace net {
+
 TcpSocket::TcpSocket(NetInterface* callback) {
 	ResetMember();
 	callback_ = callback;
 }
 
-TcpSocket::~TcpSocket() { Destroy(); }
+TcpSocket::~TcpSocket() {
+  Destroy();
+}
 
 void TcpSocket::ResetMember() {
 	callback_ = nullptr;
@@ -38,7 +42,7 @@ void TcpSocket::Destroy() {
 	}
 }
 
-bool TcpSocket::Bind(std::string ip, int port) {
+bool TcpSocket::Bind(const std::string& ip, int port) {
 	if (socket_ == INVALID_SOCKET) {
 		return false;
 	}
@@ -65,21 +69,21 @@ bool TcpSocket::Bind(std::string ip, int port) {
 	return true;
 }
 
-bool TcpSocket::Listen() {
+bool TcpSocket::Listen(int backlog) {
 	if (socket_ == INVALID_SOCKET || !is_bind_) {
 		return false;
 	}
 	if (is_listen_) {
 		return true;
 	}
-	if (::listen(socket_, SOMAXCONN) != 0) {
+	if (::listen(socket_, backlog) != 0) {
 		return false;
 	}
 	is_listen_ = true;
 	return true;
 }
 
-bool TcpSocket::Connect(std::string ip, int port) {
+bool TcpSocket::Connect(const std::string& ip, int port) {
 	if (socket_ == INVALID_SOCKET || !is_bind_ || is_listen_) {
 		return false;
 	}
@@ -99,11 +103,11 @@ bool TcpSocket::Connect(std::string ip, int port) {
 	return true;
 }
 
-bool TcpSocket::AsyncAccept(SOCKET listening_socket, PVOID buffer, LPOVERLAPPED ovlp) {
-	if (listening_socket == INVALID_SOCKET || !buffer || !ovlp){
+bool TcpSocket::AsyncAccept(SOCKET listen_sock, char* buffer, LPOVERLAPPED ovlp) {
+	if (listen_sock == INVALID_SOCKET || ovlp == NULL){
 		return false;
 	}
-	listen_sock_ = listening_socket;
+	listen_sock_ = listen_sock;
 	int addr_size = sizeof(SOCKADDR_IN) + 16;
 	DWORD bytes_received = 0;
 	if (!::AcceptEx(listen_sock_, socket_, buffer, 0, addr_size, addr_size, &bytes_received, ovlp)) {
@@ -114,15 +118,15 @@ bool TcpSocket::AsyncAccept(SOCKET listening_socket, PVOID buffer, LPOVERLAPPED 
 	return true;
 }
 
-bool TcpSocket::AsyncSend(char* buffer, int size, LPOVERLAPPED ovlp) {
+bool TcpSocket::AsyncSend(const char* buffer, int size, LPOVERLAPPED ovlp) {
 	if (!is_connect_ || buffer == nullptr || ovlp == NULL) {
 		return false;
 	}
-	WSABUF wsa_buffer[1] = {0};
-	wsa_buffer[0].buf = buffer;
-	wsa_buffer[0].len = size;
+  WSABUF buff[1] = {0};
+  buff[0].buf = const_cast<char*>(buffer);
+  buff[0].len = size;
 	DWORD bytes_sent = 0;
-	if (::WSASend(socket_, wsa_buffer, 1, &bytes_sent, 0, ovlp, NULL) != 0) {
+	if (::WSASend(socket_, buff, 1, &bytes_sent, 0, ovlp, NULL) != 0) {
 		if (WSAGetLastError() != ERROR_IO_PENDING) {
 			return false;
 		}
@@ -130,16 +134,16 @@ bool TcpSocket::AsyncSend(char* buffer, int size, LPOVERLAPPED ovlp) {
 	return true;
 }
 
-bool TcpSocket::AsyncRecv(char* buffer, int size, LPOVERLAPPED ovlp) {
-	if ((!is_listen_ && !is_connect_) || !buffer || !ovlp) {
+bool TcpSocket::AsyncRecv(const char* buffer, int size, LPOVERLAPPED ovlp) {
+	if ((!is_listen_ && !is_connect_) || ovlp == NULL) {
 		return false;
 	}
-	WSABUF wsa_buffer[1] = {0};
-	wsa_buffer[0].buf = buffer;
-	wsa_buffer[0].len = size;
+  WSABUF buff[1] = {0};
+  buff[0].buf = const_cast<char*>(buffer);
+  buff[0].len = size;
 	DWORD received_flag = 0;
 	DWORD bytes_received = 0;
-	if (::WSARecv(socket_, wsa_buffer, 1, &bytes_received, &received_flag, ovlp, NULL) != 0) {
+	if (::WSARecv(socket_, buff, 1, &bytes_received, &received_flag, ovlp, NULL) != 0) {
 		if (WSAGetLastError() != ERROR_IO_PENDING) {
 			return false;
 		}
@@ -151,7 +155,7 @@ bool TcpSocket::SetAccepted() {
 	if (0 != ::setsockopt(socket_, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT, (char*)&listen_sock_, sizeof(listen_sock_))) {
 			return false;
 	}
-	string local_ip, remote_ip;
+	std::string local_ip, remote_ip;
 	int local_port, remote_port;
 	GetLocalAddr(local_ip, local_port);
 	GetRemoteAddr(remote_ip, remote_port);
@@ -162,20 +166,20 @@ bool TcpSocket::SetAccepted() {
 	return true;
 }
 
-bool TcpSocket::ToSockAddr(SOCKADDR_IN& addr, string ip, int port) {
+bool TcpSocket::ToSockAddr(SOCKADDR_IN& addr, const std::string& ip, int port) {
 	addr.sin_family = AF_INET;
 	addr.sin_addr.s_addr = ::inet_addr(ip.c_str());
 	addr.sin_port = ::htons(static_cast<u_short>(port));
 	return true;
 }
 
-bool TcpSocket::FromSockAddr(const SOCKADDR_IN& addr, string& ip, int& port) {
+bool TcpSocket::FromSockAddr(const SOCKADDR_IN& addr, std::string& ip, int& port) {
 	ip = ::inet_ntoa(addr.sin_addr);
 	port = ::ntohs(addr.sin_port);
 	return true;
 }
 
-bool TcpSocket::GetLocalAddr(string& ip, int& port) {
+bool TcpSocket::GetLocalAddr(std::string& ip, int& port) {
 	SOCKADDR_IN addr = {0};
 	int size = sizeof(addr);
 	if (::getsockname(socket_, (SOCKADDR*)&addr, &size) != 0) {
@@ -184,7 +188,7 @@ bool TcpSocket::GetLocalAddr(string& ip, int& port) {
 	return FromSockAddr(addr, ip, port);
 }
 
-bool TcpSocket::GetRemoteAddr(string& ip, int& port) {
+bool TcpSocket::GetRemoteAddr(std::string& ip, int& port) {
 	SOCKADDR_IN addr = {0};
 	int size = sizeof(addr);
 	if (::getpeername(socket_, (SOCKADDR*)&addr, &size) != 0) {
@@ -192,3 +196,5 @@ bool TcpSocket::GetRemoteAddr(string& ip, int& port) {
 	}
 	return FromSockAddr(addr, ip, port);
 }
+
+} // namespace net

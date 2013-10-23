@@ -16,8 +16,8 @@ class BaseBuffer {
 	BaseBuffer() { ResetBuffer(); }
 	unsigned long link() { return link_; }
 	void set_link(unsigned long value) { link_ = value; }
-	SOCKET socket() { return socket_; }
-	void set_socket(SOCKET value) { socket_ = value; }
+	void* socket() { return socket_; }
+	void set_socket(void* value) { socket_ = value; }
 	int async_type() { return async_type_; }
 	void set_async_type(int value) { async_type_ = value; }
 	int buffer_size() { return buffer_size_; }
@@ -25,15 +25,15 @@ class BaseBuffer {
 	void ResetBuffer(){
 		memset(&ovlp_, 0, sizeof(ovlp_));
 		link_ = ~0;
-		socket_ = INVALID_SOCKET;
+		socket_ = nullptr;
 		async_type_ = 0;
 		buffer_size_ = 0;
 	}
 
  protected:
 	OVERLAPPED ovlp_;
-	SOCKET socket_;
   unsigned long link_;
+  void* socket_;
 	int async_type_;
 	int buffer_size_;
 };
