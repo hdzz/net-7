@@ -46,6 +46,7 @@ class ResManager {
 	bool AsyncTcpRecv(TcpLink link, TcpSocket* socket, TcpRecvBuff* buffer);
 	void OnTcpRecvNothing(TcpLink link, TcpRecvBuff* buffer, NetInterface* callback);
 	void OnTcpRecvError(TcpLink link, TcpRecvBuff* buffer, NetInterface* callback);
+	bool AsyncMoreUdpRecv(UdpLink link, UdpSocket* socket, int count);
 	bool AsyncUdpRecv(UdpLink link, UdpSocket* socket, UdpRecvBuff* buffer);
 	void OnUdpRecvError(UdpLink link, UdpRecvBuff* buffer, NetInterface* callback);
 	

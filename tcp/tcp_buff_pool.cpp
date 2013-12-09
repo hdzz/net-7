@@ -175,7 +175,7 @@ void TcpBuffPool::FillTcpSendBuff(const char* packet, int size, std::vector<TcpS
   auto fill_offset = packet;
   auto fill_left = size;
   int buffer_num = buffer.size();
-  for (auto i=0; i<buffer_num; ++i) {
+  for (auto i = 0; i < buffer_num; ++i) {
     auto& each_buffer = buffer.at(i);
     if (i == 0) {
       TcpHeader header;

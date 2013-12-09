@@ -2,6 +2,8 @@
 #include "tcp_header.h"
 #include "log.h"
 
+const int kUDPRecvNumber = 8;
+
 namespace net {
 
 ResManager::ResManager() {
@@ -112,7 +114,10 @@ bool ResManager::Connect(TcpLink link, const char* ip, int port) {
 	if (recv_buffer == nullptr) {
 		return false;
 	}
-	return AsyncTcpRecv(link, find_socket, recv_buffer);
+	if (!AsyncTcpRecv(link, find_socket, recv_buffer)) {
+		return false;
+	}
+	return true;
 }
 
 bool ResManager::SendTcpPacket(TcpLink link, const char* packet, int size) {
@@ -123,15 +128,20 @@ bool ResManager::SendTcpPacket(TcpLink link, const char* packet, int size) {
 	if (find_socket == nullptr) {
 		return false;
 	}
+	auto is_send_failed = false;
 	auto send_buffer = tcp_buff_pool_.GetSendBuffer(packet, size);
 	for (auto& i : send_buffer) {
-		i->set_link(link);
-		if (!find_socket->AsyncSend(i->buffer(), i->buffer_size(), (LPOVERLAPPED)i)) {
+		if (!is_send_failed) {
+			i->set_link(link);
+			if (!find_socket->AsyncSend(i->buffer(), i->buffer_size(), (LPOVERLAPPED)i)) {
+				tcp_buff_pool_.ReturnSendBuff(i);
+				is_send_failed = true;
+			}
+		} else {
 			tcp_buff_pool_.ReturnSendBuff(i);
-			return false;
 		}
 	}
-	return true;
+	return !is_send_failed;
 }
 
 bool ResManager::GetTcpLinkLocalAddr(TcpLink link, char ip[16], int& port) {
@@ -183,12 +193,10 @@ bool ResManager::CreateUdpLink(NetInterface* callback, const char* ip, int port,
 		return false;
 	}
 	new_link = AddUdpLink(new_socket);
-	auto recv_buffer = udp_buff_pool_.GetRecvBuffer();
-	if (recv_buffer == nullptr) {
-		RemoveUdpLink(new_link);
+	if (!AsyncMoreUdpRecv(new_link, new_socket, kUDPRecvNumber)) {
 		return false;
 	}
-	return AsyncUdpRecv(new_link, new_socket, recv_buffer);
+	return true;
 }
 
 bool ResManager::DestroyUdpLink(UdpLink link) {
@@ -275,7 +283,7 @@ UdpSocket* ResManager::FindUdpSocket(UdpLink link) {
 
 bool ResManager::AsyncMoreAccept(TcpLink link, TcpSocket* socket, int count) {
 	auto is_success = false;
-	for (auto i=0; i<count; ++i) {
+	for (auto i = 0; i < count; ++i) {
 		auto accept_buffer = tcp_buff_pool_.GetAcceptBuffer();
 		if (accept_buffer == nullptr) {
 			continue;
@@ -299,6 +307,7 @@ bool ResManager::AsyncAccept(TcpLink link, TcpSocket* socket, AcceptBuff* buffer
 	if (!socket->AsyncAccept(accept_socket->socket(), buffer->buffer(), (LPOVERLAPPED)buffer)) {
 		delete accept_socket;
 		tcp_buff_pool_.ReturnAcceptBuff(buffer);
+		LOG(kError, "async accept error, link: %d.", link);
 		return false;
 	}
 	return true;
@@ -323,6 +332,20 @@ void ResManager::OnTcpRecvError(TcpLink link, TcpRecvBuff* buffer, NetInterface*
 	tcp_buff_pool_.ReturnRecvBuff(buffer);
 	RemoveTcpLink(link);
 	callback->OnTcpLinkError(link, 1);
+}
+
+bool ResManager::AsyncMoreUdpRecv(UdpLink link, UdpSocket* socket, int count) {
+	for (auto i = 0; i < count; ++i) {
+		auto recv_buffer = udp_buff_pool_.GetRecvBuffer();
+		if (recv_buffer == nullptr) {
+			RemoveUdpLink(link);
+			return false;
+		}
+		if (!AsyncUdpRecv(link, socket, recv_buffer)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 bool ResManager::AsyncUdpRecv(UdpLink link, UdpSocket* socket, UdpRecvBuff* buffer) {
@@ -440,12 +463,12 @@ bool ResManager::ParseHeader(TcpSocket* recv_sock, const char* data, int size, i
   if (header.size() < kTcpHeadSize) {// 还在处理TCP头
     int left_header_size = kTcpHeadSize - header.size();  // TCP头还欠多少没收完
     if (left_header_size > size) {// 剩余的流中也不够填满TCP头
-      for (auto i = 0; i< size; ++i) {
+      for (auto i = 0; i < size; ++i) {
         header.push_back(data[i]);
       }
       dealed_size = size;
     } else {// 剩余的流中足够填满TCP头
-      for (auto i = 0; i< left_header_size; ++i) {
+      for (auto i = 0; i < left_header_size; ++i) {
         header.push_back(data[i]);
       }
       dealed_size = left_header_size;
@@ -468,12 +491,12 @@ int ResManager::ParsePacket(TcpSocket* recv_sock, const char* data, int size) {
   if (packet.size() < packet_size) {// 还在处理一个包
     int left_packet_size = packet_size - packet.size();  // 包还欠多少没收完
     if (left_packet_size > size) {// 剩余的流中也不够填满这个包
-      for (auto i = 0; i< size; ++i) {
+      for (auto i = 0; i < size; ++i) {
         packet.push_back(data[i]);
       }
 			return size;
     } else {
-      for (auto i = 0; i< left_packet_size; ++i) {
+      for (auto i = 0; i < left_packet_size; ++i) {
         packet.push_back(data[i]);
       }
       all_packets.push_back(std::move(packet));
@@ -496,10 +519,10 @@ bool ResManager::OnUdpLinkRecv(UdpRecvBuff* buffer, int recv_size) {
 		udp_buff_pool_.ReturnRecvBuff(buffer);
 		return false;
 	}
-	auto callback = recv_socket->callback();
 	std::string ip;
 	int port = 0;
 	recv_socket->FromSockAddr(*buffer->from_addr(), ip, port);
+	auto callback = recv_socket->callback();
 	callback->OnUdpLinkReceived(recv_link, buffer->buffer(), recv_size, ip.c_str(), port);
 	return AsyncUdpRecv(recv_link, recv_socket, buffer);
 }

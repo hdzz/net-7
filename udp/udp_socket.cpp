@@ -40,7 +40,7 @@ bool UdpSocket::Bind(const std::string& ip, int port) {
 	if (socket_ == INVALID_SOCKET) {
 		return false;
 	}
-	SOCKADDR_IN bind_addr = { 0 };
+	SOCKADDR_IN bind_addr = {0};
 	ToSockAddr(bind_addr, ip, port);
 	if (::bind(socket_, (SOCKADDR*)&bind_addr, sizeof(bind_addr)) != 0) {
 		return false;

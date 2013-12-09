@@ -19,7 +19,7 @@ bool IOCP::Init(std::function<bool(LPOVERLAPPED, DWORD)> callback) {
 	if (!callback) {
 		return false;
 	}
-	WSAData wsa_data = { 0 };
+	WSAData wsa_data = {0};
 	if (::WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
 		return false;
 	}
@@ -71,8 +71,8 @@ bool IOCP::BindToIOCP(SOCKET socket) {
 bool IOCP::ThreadWorker() {
 	while (true) {
 		DWORD transfer_size = 0;
-		LPOVERLAPPED ovlp = NULL;
 		ULONG completion_key = NULL;
+		LPOVERLAPPED ovlp = NULL;
 		if (!::GetQueuedCompletionStatus(iocp_, &transfer_size, &completion_key, &ovlp, INFINITE)) {
 			int error_code = ::WSAGetLastError();
 			if (error_code != ERROR_NETNAME_DELETED && error_code != ERROR_CONNECTION_ABORTED) {
