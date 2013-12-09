@@ -36,7 +36,6 @@ bool IOCP::Init(std::function<bool(LPOVERLAPPED, DWORD)> callback) {
 		auto new_thread = new std::thread(thread_proc);
 		iocp_thread_.push_back(new_thread);
 	}
-	LOG(kStartup, "IOCP thread number: %d.", iocp_thread_.size());
 	return true;
 }
 

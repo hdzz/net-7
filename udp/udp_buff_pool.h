@@ -33,10 +33,10 @@ class UdpBuffPool {
 	void TryNarrowRecvBuff();
 
  private:
-	std::list<UdpSendBuff*> send_buffer_;	  // ËùÓÐ·¢ËÍ»º³å
-	std::list<UdpRecvBuff*> recv_buffer_;	  // ËùÓÐ½ÓÊÕ»º³å
-	std::recursive_mutex send_buff_lock_;		// ·¢ËÍ»º³åËø
-	std::recursive_mutex recv_buff_lock_;		// ½ÓÊÕ»º³åËø
+	std::list<UdpSendBuff*> send_buffer_;	// ËùÓÐ·¢ËÍ»º³å
+	std::list<UdpRecvBuff*> recv_buffer_;	// ËùÓÐ½ÓÊÕ»º³å
+	std::mutex send_buff_lock_;						// ·¢ËÍ»º³åËø
+	std::mutex recv_buff_lock_;						// ½ÓÊÕ»º³åËø
 };
 
 } // namespace net

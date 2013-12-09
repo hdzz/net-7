@@ -68,10 +68,9 @@ bool UdpSocket::AsyncSendTo(const char* buffer, int size, const std::string& ip,
   WSABUF buff = {0};
   buff.buf = const_cast<char*>(buffer);
   buff.len = size;
-	DWORD bytes_sent = 0;
 	SOCKADDR_IN send_to_addr = {0};
 	ToSockAddr(send_to_addr, ip, port);
-	if (::WSASendTo(socket_, &buff, 1, &bytes_sent, 0, (PSOCKADDR)&send_to_addr, sizeof(send_to_addr), ovlp, NULL) != 0) {
+	if (::WSASendTo(socket_, &buff, 1, NULL, 0, (PSOCKADDR)&send_to_addr, sizeof(send_to_addr), ovlp, NULL) != 0) {
 		if (::WSAGetLastError() != ERROR_IO_PENDING) {
 			return false;
 		}
@@ -79,7 +78,7 @@ bool UdpSocket::AsyncSendTo(const char* buffer, int size, const std::string& ip,
 	return true;
 }
 
-bool UdpSocket::AsyncRecvFrom(char* buffer, int size, LPOVERLAPPED ovlp, PSOCKADDR_IN addr) {
+bool UdpSocket::AsyncRecvFrom(char* buffer, int size, LPOVERLAPPED ovlp, PSOCKADDR_IN addr, PINT addr_size) {
 	if (socket_ == INVALID_SOCKET || ovlp == NULL) {
 		return false;
 	}
@@ -87,9 +86,7 @@ bool UdpSocket::AsyncRecvFrom(char* buffer, int size, LPOVERLAPPED ovlp, PSOCKAD
   buff.buf = buffer;
   buff.len = size;
 	DWORD received_flag = 0;
-	DWORD bytes_received = 0;
-	INT addr_size = sizeof(*addr);
-	if (::WSARecvFrom(socket_, &buff, 1, &bytes_received, &received_flag, (PSOCKADDR)addr, &addr_size, ovlp, NULL) != 0) {
+	if (::WSARecvFrom(socket_, &buff, 1, NULL, &received_flag, (PSOCKADDR)addr, addr_size, ovlp, NULL) != 0) {
 		if (::WSAGetLastError() != ERROR_IO_PENDING) {
 			return false;
 		}

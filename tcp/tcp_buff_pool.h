@@ -41,10 +41,10 @@ class TcpBuffPool {
  private:
 	std::list<AcceptBuff*> accept_buffer_;  // 所有accept缓冲
   std::list<TcpSendBuff*> send_buffer_;	  // 所有发送缓冲
-  std::list<TcpRecvBuff*> recv_buffer_;	  // 所有接收缓冲
-	std::recursive_mutex accept_buff_lock_;	// accept缓冲锁
-	std::recursive_mutex send_buff_lock_;		// 发送缓冲锁
-	std::recursive_mutex recv_buff_lock_;		// 接收缓冲锁
+  std::list<TcpRecvBuff*> recv_buffer_;		// 所有接收缓冲
+	std::mutex accept_buff_lock_;						// accept缓冲锁
+	std::mutex send_buff_lock_;							// 发送缓冲锁
+	std::mutex recv_buff_lock_;							// 接收缓冲锁
 };
 
 } // namespace net

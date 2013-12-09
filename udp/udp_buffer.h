@@ -40,13 +40,16 @@ class UdpRecvBuff : public BaseBuffer {
 		set_async_type(kAsyncTypeUdpRecv);
 		set_buffer_size(sizeof(buffer_));
 		memset(&from_addr_, 0, sizeof(from_addr_));
+		addr_size_ = sizeof(from_addr_);
 	}
 	char* buffer() { return buffer_; }
 	PSOCKADDR_IN from_addr() { return &from_addr_; }
+	PINT addr_size() { return &addr_size_;  }
 
  private:
 	char buffer_[kUdpBufferSize];
 	SOCKADDR_IN from_addr_;
+	INT addr_size_;
 };
 
 } // namespace net

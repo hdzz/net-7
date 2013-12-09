@@ -122,8 +122,7 @@ bool TcpSocket::AsyncSend(const char* buffer, int size, LPOVERLAPPED ovlp) {
   WSABUF buff = {0};
   buff.buf = const_cast<char*>(buffer);
   buff.len = size;
-	DWORD bytes_sent = 0;
-	if (::WSASend(socket_, &buff, 1, &bytes_sent, 0, ovlp, NULL) != 0) {
+	if (::WSASend(socket_, &buff, 1, NULL, 0, ovlp, NULL) != 0) {
 		if (::WSAGetLastError() != ERROR_IO_PENDING) {
 			return false;
 		}
@@ -139,8 +138,7 @@ bool TcpSocket::AsyncRecv(char* buffer, int size, LPOVERLAPPED ovlp) {
   buff.buf = buffer;
   buff.len = size;
 	DWORD received_flag = 0;
-	DWORD bytes_received = 0;
-	if (::WSARecv(socket_, &buff, 1, &bytes_received, &received_flag, ovlp, NULL) != 0) {
+	if (::WSARecv(socket_, &buff, 1, NULL, &received_flag, ovlp, NULL) != 0) {
 		if (::WSAGetLastError() != ERROR_IO_PENDING) {
 			return false;
 		}

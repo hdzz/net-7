@@ -4,8 +4,6 @@
 
 namespace net {
 
-const int kAsyncUDPRecvNum = 64;
-
 ResManager::ResManager() {
   is_net_started_ = false;
   tcp_link_count_ = 0;
@@ -185,14 +183,12 @@ bool ResManager::CreateUdpLink(NetInterface* callback, const char* ip, int port,
 		return false;
 	}
 	new_link = AddUdpLink(new_socket);
-	for (auto i = 0; i < kAsyncUDPRecvNum; ++i) {
-		auto recv_buffer = udp_buff_pool_.GetRecvBuffer();
-		if (recv_buffer == nullptr) {
-			continue;
-		}
-		AsyncUdpRecv(new_link, new_socket, recv_buffer);
+	auto recv_buffer = udp_buff_pool_.GetRecvBuffer();
+	if (recv_buffer == nullptr) {
+		RemoveUdpLink(new_link);
+		return false;
 	}
-	return true;
+	return AsyncUdpRecv(new_link, new_socket, recv_buffer);
 }
 
 bool ResManager::DestroyUdpLink(UdpLink link) {
@@ -331,7 +327,7 @@ void ResManager::OnTcpRecvError(TcpLink link, TcpRecvBuff* buffer, NetInterface*
 
 bool ResManager::AsyncUdpRecv(UdpLink link, UdpSocket* socket, UdpRecvBuff* buffer) {
 	buffer->set_link(link);
-	if (!socket->AsyncRecvFrom(buffer->buffer(), buffer->buffer_size(), (LPOVERLAPPED)buffer, buffer->from_addr())) {
+	if (!socket->AsyncRecvFrom(buffer->buffer(), buffer->buffer_size(), (LPOVERLAPPED)buffer, buffer->from_addr(), buffer->addr_size())) {
 		OnUdpRecvError(link, buffer, socket->callback());
 		return false;
 	}

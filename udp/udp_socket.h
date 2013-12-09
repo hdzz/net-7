@@ -19,7 +19,7 @@ class UdpSocket {
 	bool Bind(const std::string& ip, int port);
 	void Destroy();
 	bool AsyncSendTo(const char* buffer, int size, const std::string& ip, int port, LPOVERLAPPED ovlp);
-	bool AsyncRecvFrom(char* buffer, int size, LPOVERLAPPED ovlp, PSOCKADDR_IN addr);
+	bool AsyncRecvFrom(char* buffer, int size, LPOVERLAPPED ovlp, PSOCKADDR_IN addr, PINT addr_size);
 	
 	void ToSockAddr(SOCKADDR_IN& addr, const std::string& ip, int port);
 	void FromSockAddr(const SOCKADDR_IN& addr, std::string& ip, int& port);
