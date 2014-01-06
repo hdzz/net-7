@@ -1,4 +1,6 @@
 #include "udp_socket.h"
+#include "log.h"
+#include "utility.h"
 #include <MSWSock.h>
 #pragma comment(lib, "Ws2_32.lib")
 #pragma comment(lib, "Mswsock.lib")
@@ -6,103 +8,115 @@
 namespace net {
 
 UdpSocket::UdpSocket() {
-	callback_ = nullptr;
-	socket_ = INVALID_SOCKET;
+  callback_ = nullptr;
+  socket_ = INVALID_SOCKET;
+  bind_ = false;
 }
 
 UdpSocket::~UdpSocket() {
   Destroy();
 }
 
-bool UdpSocket::Create(NetInterface* callback, bool broadcast) {
-	if (socket_ != INVALID_SOCKET) {
-		return true;
-	}
-	if (callback == nullptr) {
-		return false;
-	}
-	callback_ = callback;
-	socket_ = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (socket_ == INVALID_SOCKET) {
-		return false;
-	}
-	if (broadcast) {
-		BOOL is_broadcast = TRUE;
-		if (setsockopt(socket_, SOL_SOCKET, SO_BROADCAST, (char*)&is_broadcast, sizeof(is_broadcast)) != 0) {
-			Destroy();
-			return false;
-		}
-	}
-	return true;
+bool UdpSocket::Create(NetInterface* callback) {
+  if (socket_ != INVALID_SOCKET) {
+    LOG(kError, "create udp socket failed: already created.");
+    return false;
+  }
+  if (callback == nullptr) {
+    LOG(kError, "create udp socket failed: invalid callback parameter.");
+    return false;
+  }
+  socket_ = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (socket_ == INVALID_SOCKET) {
+    LOG(kError, "create udp socket failed, error code: %d.", ::WSAGetLastError());
+    return false;
+  }
+  callback_ = callback;
+  BOOL broadcast_opt = TRUE;
+  if (::setsockopt(socket_, SOL_SOCKET, SO_BROADCAST, (char*)&broadcast_opt, sizeof(broadcast_opt)) != 0) {
+    LOG(kError, "set udp socket broadcast option failed, error code: %d.", ::WSAGetLastError());
+    Destroy();
+    return false;
+  }
+  return true;
 }
 
 bool UdpSocket::Bind(const std::string& ip, int port) {
-	if (socket_ == INVALID_SOCKET) {
-		return false;
-	}
-	SOCKADDR_IN bind_addr = {0};
-	ToSockAddr(bind_addr, ip, port);
-	if (::bind(socket_, (SOCKADDR*)&bind_addr, sizeof(bind_addr)) != 0) {
-		return false;
-	}
-	DWORD return_bytes = 0;
-	BOOL is_reset = FALSE;
-	if (::WSAIoctl(socket_, SIO_UDP_CONNRESET, &is_reset, sizeof(is_reset), NULL, 0, &return_bytes, NULL, NULL) != 0) {
-		return false;
-	}
-	return true;
+  if (socket_ == INVALID_SOCKET) {
+    LOG(kError, "bind udp socket failed: not created.");
+    return false;
+  }
+  if (bind_) {
+    LOG(kError, "bind udp socket failed: already bound.");
+    return false;
+  }
+  SOCKADDR_IN bind_addr = {0};
+  utility::ToSockAddr(bind_addr, ip, port);
+  if (::bind(socket_, (SOCKADDR*)&bind_addr, sizeof(bind_addr)) != 0) {
+    LOG(kError, "bind udp socket failed, error code: %d.", ::WSAGetLastError());
+    return false;
+  }
+  DWORD return_bytes = 0;
+  BOOL reset_ctl = FALSE;
+  if (::WSAIoctl(socket_, SIO_UDP_CONNRESET, &reset_ctl, sizeof(reset_ctl), NULL, 0, &return_bytes, NULL, NULL) != 0) {
+    LOG(kError, "set udp socket reset control failed, error code: %d.", ::WSAGetLastError());
+    return false;
+  }
+  bind_ = true;
+  return true;
 }
 
 void UdpSocket::Destroy() {
-	if (socket_ != INVALID_SOCKET) {
-		::closesocket(socket_);
-		socket_ = INVALID_SOCKET;
-		callback_ = nullptr;
-	}
+  if (socket_ != INVALID_SOCKET) {
+    ::closesocket(socket_);
+    socket_ = INVALID_SOCKET;
+    callback_ = nullptr;
+  }
 }
 
 bool UdpSocket::AsyncSendTo(const char* buffer, int size, const std::string& ip, int port, LPOVERLAPPED ovlp) {
-	if (socket_ == INVALID_SOCKET || buffer == nullptr || ovlp == NULL) {
-		return false;
-	}
+  if (socket_ == INVALID_SOCKET) {
+    LOG(kError, "async udp socket send buffer failed: not created.");
+    return false;
+  }
+  if (buffer == nullptr || size == 0 || ovlp == NULL) {
+    LOG(kError, "async udp socket send buffer failed: invalid parameter.");
+    return false;
+  }
   WSABUF buff = {0};
   buff.buf = const_cast<char*>(buffer);
   buff.len = size;
-	SOCKADDR_IN send_to_addr = {0};
-	ToSockAddr(send_to_addr, ip, port);
-	if (::WSASendTo(socket_, &buff, 1, NULL, 0, (PSOCKADDR)&send_to_addr, sizeof(send_to_addr), ovlp, NULL) != 0) {
-		if (::WSAGetLastError() != ERROR_IO_PENDING) {
-			return false;
-		}
-	}
-	return true;
+  SOCKADDR_IN send_to_addr = {0};
+  utility::ToSockAddr(send_to_addr, ip, port);
+  if (::WSASendTo(socket_, &buff, 1, NULL, 0, (PSOCKADDR)&send_to_addr, sizeof(send_to_addr), ovlp, NULL) != 0) {
+    if (::WSAGetLastError() != ERROR_IO_PENDING) {
+      LOG(kError, "WSASendTo failed, error code: %d.", ::WSAGetLastError());
+      return false;
+    }
+  }
+  return true;
 }
 
 bool UdpSocket::AsyncRecvFrom(char* buffer, int size, LPOVERLAPPED ovlp, PSOCKADDR_IN addr, PINT addr_size) {
-	if (socket_ == INVALID_SOCKET || ovlp == NULL) {
-		return false;
-	}
+  if (socket_ == INVALID_SOCKET) {
+    LOG(kError, "async udp socket recv buffer failed: not created.");
+    return false;
+  }
+  if (buffer == nullptr || size == 0 || ovlp == NULL || addr == nullptr || addr_size == nullptr) {
+    LOG(kError, "async ud socket recv buffer failed: invalid parameter.");
+    return false;
+  }
   WSABUF buff = {0};
   buff.buf = buffer;
   buff.len = size;
-	DWORD received_flag = 0;
-	if (::WSARecvFrom(socket_, &buff, 1, NULL, &received_flag, (PSOCKADDR)addr, addr_size, ovlp, NULL) != 0) {
-		if (::WSAGetLastError() != ERROR_IO_PENDING) {
-			return false;
-		}
-	}
-	return true;
-}
-
-void UdpSocket::ToSockAddr(SOCKADDR_IN& addr, const std::string& ip, int port) {
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = ::inet_addr(ip.c_str());
-	addr.sin_port = ::htons(static_cast<u_short>(port));
-}
-
-void UdpSocket::FromSockAddr(const SOCKADDR_IN& addr, std::string& ip, int& port) {
-	ip = ::inet_ntoa(addr.sin_addr);
-	port = ::ntohs(addr.sin_port);
+  DWORD received_flag = 0;
+  if (::WSARecvFrom(socket_, &buff, 1, NULL, &received_flag, (PSOCKADDR)addr, addr_size, ovlp, NULL) != 0) {
+    if (::WSAGetLastError() != ERROR_IO_PENDING) {
+      LOG(kError, "WSARecvFrom failed, error code: %d.", ::WSAGetLastError());
+      return false;
+    }
+  }
+  return true;
 }
 
 } // namespace net
