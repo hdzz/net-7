@@ -7,32 +7,40 @@ namespace net {
 
 const int kUdpBufferSize = 8 * 1024;
 
-class UdpSendBuff : public BaseBuffer {
+class UdpSendBuffer : public BaseBuffer {
  public:
-  UdpSendBuff() {
-    ResetBuffer();
-  }
-  void ResetBuffer() {
+  UdpSendBuffer() {
     BaseBuffer::ResetBuffer();
     set_async_type(kAsyncTypeUdpSend);
+    buffer_ = nullptr;
+    deleter_ = nullptr;
   }
-  char* buffer() { return buffer_; }
-  bool set_buffer(const char* buffer, int size) {
-    if (buffer == nullptr || size == 0) {
+  ~UdpSendBuffer() {
+    if (buffer_ != nullptr) {
+      if (deleter_) {
+        deleter_(buffer_);
+      }
+    }
+  }
+  bool Init(const char* buffer, int size, std::function<void(char*)> deleter) {
+    if (buffer == nullptr || size == 0 || !deleter) {
       return false;
     }
-    memcpy(buffer_, buffer, size);
+    buffer_ = const_cast<char*>(buffer);
+    deleter_ = deleter;
     set_buffer_size(size);
     return true;
   }
+  const char* buffer() { return buffer_; }
 
  private:
-  char buffer_[kUdpBufferSize];
+   char* buffer_;
+   std::function<void(char*)> deleter_;
 };
 
-class UdpRecvBuff : public BaseBuffer {
+class UdpRecvBuffer : public BaseBuffer {
  public:
-  UdpRecvBuff() {
+  UdpRecvBuffer() {
     ResetBuffer();
   }
   void ResetBuffer() {

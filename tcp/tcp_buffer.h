@@ -2,39 +2,51 @@
 #define NET_TCP_BUFFER_H_
 
 #include "base_buffer.h"
+#include "tcp_header.h"
+#include <functional>
 
 namespace net {
 
 const int kTcpAcceptBuffSize = 64;
 const int kTcpBufferSize = 64 * 1024;
 
-class TcpSendBuff : public BaseBuffer {
-public:
-  TcpSendBuff() {
-    ResetBuffer();
-  }
-  void ResetBuffer() {
+class TcpSendBuffer : public BaseBuffer {
+ public:
+  TcpSendBuffer() {
     BaseBuffer::ResetBuffer();
     set_async_type(kAsyncTypeTcpSend);
+    buffer_ = nullptr;
+    deleter_ = nullptr;
   }
-  char* buffer() { return buffer_; }
-  bool set_buffer(int offset, const char* buffer, int size) {
-    auto total_size = size + offset;
-    if (buffer == nullptr || total_size > sizeof(buffer_)) {
+  ~TcpSendBuffer() {
+    if (buffer_ != nullptr) {
+      if (deleter_) {
+        deleter_(buffer_);
+      }
+    }
+  }
+  bool Init(const char* buffer, int size, std::function<void (char*)> deleter) {
+    if (buffer == nullptr || size == 0 || !deleter) {
       return false;
     }
-    auto current_pos = buffer_ + offset;
-    memcpy(current_pos, buffer, size);
+    buffer_ = const_cast<char*>(buffer);
+    deleter_ = deleter;
+    header_.Init(size);
+    set_buffer_size(size);
     return true;
   }
+  const TcpHeader* header() { return &header_; }
+  const char* buffer() { return buffer_; }
 
-private:
-  char buffer_[kTcpBufferSize];
+ private:
+  TcpHeader header_;
+  char* buffer_;
+  std::function<void (char*)> deleter_;
 };
 
-class TcpRecvBuff : public BaseBuffer {
+class TcpRecvBuffer : public BaseBuffer {
 public:
-  TcpRecvBuff() {
+  TcpRecvBuffer() {
     ResetBuffer();
   }
   void ResetBuffer() {
@@ -48,9 +60,9 @@ private:
   char buffer_[kTcpBufferSize];
 };
 
-class TcpAcceptBuff : public BaseBuffer {
+class TcpAcceptBuffer : public BaseBuffer {
 public:
-  TcpAcceptBuff() {
+  TcpAcceptBuffer() {
     ResetBuffer();
   }
   void ResetBuffer() {

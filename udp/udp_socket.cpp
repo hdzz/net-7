@@ -1,8 +1,7 @@
 #include "udp_socket.h"
 #include "log.h"
-#include "utility.h"
+#include "utility_net.h"
 #include <MSWSock.h>
-#pragma comment(lib, "Ws2_32.lib")
 #pragma comment(lib, "Mswsock.lib")
 
 namespace net {

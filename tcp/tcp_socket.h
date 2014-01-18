@@ -8,9 +8,20 @@
 namespace net {
 
 class NetInterface;
+class TcpHeader;
 
 class TcpSocket {
  public:
+  struct RecvPacket {
+    char* packet;
+    int size;
+    bool need_clear;
+    ~RecvPacket() {
+      if (need_clear)
+        delete[] packet;
+    }
+  };
+
   TcpSocket();
   ~TcpSocket();
 
@@ -19,8 +30,8 @@ class TcpSocket {
   bool Bind(const std::string& ip, int port);
   bool Listen(int backlog);
   bool Connect(const std::string& ip, int port);
-  bool AsyncAccept(SOCKET accept_sock, char* buffer, LPOVERLAPPED ovlp);
-  bool AsyncSend(const char* buffer, int size, LPOVERLAPPED ovlp);
+  bool AsyncAccept(SOCKET accept_sock, char* buffer, int size, LPOVERLAPPED ovlp);
+  bool AsyncSend(const TcpHeader* header, const char* buffer, int size, LPOVERLAPPED ovlp);
   bool AsyncRecv(char* buffer, int size, LPOVERLAPPED ovlp);
   bool SetAccepted(SOCKET listen_sock);
   bool GetLocalAddr(std::string& ip, int& port);
@@ -28,16 +39,16 @@ class TcpSocket {
 
   SOCKET socket() { return socket_; }
   NetInterface* callback() { return callback_; }
-  const std::vector<std::vector<char>>& all_packets() { return all_packets_; }
+  const std::vector<RecvPacket>& all_packets() { return all_packets_; }
   bool OnRecv(const char* data, int size);
   void OnRecvDone() { all_packets_.clear(); }
 
  private:
-  TcpSocket(const TcpSocket&);
-  TcpSocket& operator=(const TcpSocket&);
+  TcpSocket(const TcpSocket&) = delete;
+  TcpSocket& operator=(const TcpSocket&) = delete;
   void ResetMember();
   bool CalcPacketSize();
-  bool ParseTcpHeader(const char* data, int size, int& dealed_size);
+  bool ParseTcpHeader(const char* data, int size, int& parsed_size);
   int ParseTcpPacket(const char* data, int size);
 
  private:
@@ -47,9 +58,9 @@ class TcpSocket {
   bool listen_;
   bool connect_;
   std::vector<char> current_header_;
-  std::vector<char> current_packet_;
-  std::vector<std::vector<char>> all_packets_;
-  unsigned int current_packet_size_;
+  RecvPacket current_packet_;
+  int current_packet_offset_;
+  std::vector<RecvPacket> all_packets_;
 };
 
 } // namespace net

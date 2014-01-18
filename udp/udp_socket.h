@@ -23,8 +23,8 @@ class UdpSocket {
   NetInterface* callback() { return callback_; }
 
  private:
-  UdpSocket(const UdpSocket&);
-  UdpSocket& operator=(const UdpSocket&);
+  UdpSocket(const UdpSocket&) = delete;
+  UdpSocket& operator=(const UdpSocket&) = delete;
 
  private:
   NetInterface* callback_;

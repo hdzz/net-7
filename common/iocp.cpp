@@ -13,7 +13,7 @@ IOCP::~IOCP() {
   Uninit();
 }
 
-bool IOCP::Init(std::function<bool(LPOVERLAPPED, DWORD)> callback) {
+bool IOCP::Init(std::function<bool (LPOVERLAPPED, DWORD)> callback) {
   if (init_) {
     return true;
   }

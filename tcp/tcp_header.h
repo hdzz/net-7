@@ -6,7 +6,7 @@
 namespace net {
 
 const unsigned long kTcpPacketFlag = 0xfdfdfdfd;
-const unsigned long kMaxTcpPacketSize = 16 * 1024 * 1024;
+const unsigned long kMaxTcpSendPacketSize = 16 * 1024 * 1024;
 
 class TcpHeader {
  public:
@@ -16,27 +16,25 @@ class TcpHeader {
     checksum_ = 0;
   }
   void Init(unsigned long packet_size) {
-    set_packet_size(packet_size);
-    ::htonl(packet_flag_);
-    ::htonl(packet_size_);
-    ::htonl(checksum_);
+    packet_size_ = packet_size;
+    packet_flag_ = ::htonl(packet_flag_);
+    packet_size_ = ::htonl(packet_size_);
+    checksum_ = ::htonl(checksum_);
   }
   bool Init(const char* data, int size) {
     if (data == nullptr || size != sizeof(*this)) {
       return false;
     }
     memcpy(this, data, size);
-    ::ntohl(packet_flag_);
-    ::ntohl(packet_size_);
-    ::ntohl(checksum_);
-    if (packet_flag_ != kTcpPacketFlag || packet_size_ > kMaxTcpPacketSize) {
+    packet_flag_ = ::ntohl(packet_flag_);
+    packet_size_ = ::ntohl(packet_size_);
+    checksum_ = ::ntohl(checksum_);
+    if (packet_flag_ != kTcpPacketFlag || packet_size_ > kMaxTcpSendPacketSize) {
       return false;
     }
     return true;
   }
-  operator char*() { return (char*)(this); }
   unsigned long packet_size() { return packet_size_; }
-  void set_packet_size(unsigned long value) { packet_size_ = value; }
 
  private:
   unsigned long packet_flag_;

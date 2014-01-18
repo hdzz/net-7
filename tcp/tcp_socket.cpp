@@ -1,9 +1,8 @@
 #include "tcp_socket.h"
 #include "tcp_header.h"
 #include "log.h"
-#include "utility.h"
+#include "utility_net.h"
 #include <MSWSock.h>
-#pragma comment(lib, "Ws2_32.lib")
 #pragma comment(lib, "Mswsock.lib")
 
 namespace net {
@@ -23,9 +22,8 @@ void TcpSocket::ResetMember() {
   listen_ = false;
   connect_ = false;
   current_header_.clear();
-  current_packet_.clear();
+  current_packet_offset_ = 0;
   all_packets_.clear();
-  current_packet_size_ = 0;
 }
 
 bool TcpSocket::Create(NetInterface* callback) {
@@ -119,16 +117,16 @@ bool TcpSocket::Connect(const std::string& ip, int port) {
   return true;
 }
 
-bool TcpSocket::AsyncAccept(SOCKET accept_sock, char* buffer, LPOVERLAPPED ovlp) {
+bool TcpSocket::AsyncAccept(SOCKET accept_sock, char* buffer, int size, LPOVERLAPPED ovlp) {
   if (socket_ == INVALID_SOCKET) {
     LOG(kError, "async tcp socket accept buffer failed: not created.");
     return false;
   }
-  if (accept_sock == INVALID_SOCKET || buffer == nullptr || ovlp == NULL){
+  int addr_size = sizeof(SOCKADDR_IN) + 16;
+  if (accept_sock == INVALID_SOCKET || buffer == nullptr || size < addr_size || ovlp == NULL){
     LOG(kError, "async tcp socket accept buffer failed: invalid parameter.");
     return false;
   }
-  auto addr_size = sizeof(SOCKADDR_IN)+16;
   DWORD bytes_received = 0;
   if (!::AcceptEx(socket_, accept_sock, buffer, 0, addr_size, addr_size, &bytes_received, ovlp)) {
     if (::WSAGetLastError() != ERROR_IO_PENDING) {
@@ -139,7 +137,7 @@ bool TcpSocket::AsyncAccept(SOCKET accept_sock, char* buffer, LPOVERLAPPED ovlp)
   return true;
 }
 
-bool TcpSocket::AsyncSend(const char* buffer, int size, LPOVERLAPPED ovlp) {
+bool TcpSocket::AsyncSend(const TcpHeader* header, const char* buffer, int size, LPOVERLAPPED ovlp) {
   if (socket_ == INVALID_SOCKET) {
     LOG(kError, "async tcp socket send buffer failed: not created.");
     return false;
@@ -152,10 +150,12 @@ bool TcpSocket::AsyncSend(const char* buffer, int size, LPOVERLAPPED ovlp) {
     LOG(kError, "async tcp socket send buffer failed: invalid parameter.");
     return false;
   }
-  WSABUF buff = {0};
-  buff.buf = const_cast<char*>(buffer);
-  buff.len = size;
-  if (::WSASend(socket_, &buff, 1, NULL, 0, ovlp, NULL) != 0) {
+  WSABUF buff[2] = {0};
+  buff[0].buf = (char*)(header);
+  buff[0].len = kTcpHeaderSize;
+  buff[1].buf = const_cast<char*>(buffer);
+  buff[1].len = size;
+  if (::WSASend(socket_, buff, 2, NULL, 0, ovlp, NULL) != 0) {
     if (::WSAGetLastError() != ERROR_IO_PENDING) {
       LOG(kError, "WSASend failed, error code: %d.", ::WSAGetLastError());
       return false;
@@ -230,22 +230,24 @@ bool TcpSocket::GetRemoteAddr(std::string& ip, int& port) {
   return true;
 }
 
+// two steps for looping parse a recv buffer: first header part then packet part
+// if header flag is invalid or packet length too large, parse header part will fail
 bool TcpSocket::OnRecv(const char* data, int size) {
   if (data == nullptr || size == 0) {
     return false;
   }
-  auto total_dealed = 0;
-  while (total_dealed < size) {
-    auto current_dealed = 0;
-    if (!ParseTcpHeader(&data[total_dealed], size - total_dealed, current_dealed)) {
+  auto total_parsed = 0;
+  while (total_parsed < size) {
+    auto current_parsed = 0;
+    if (!ParseTcpHeader(&data[total_parsed], size - total_parsed, current_parsed)) {
       return false;
     }
-    total_dealed += current_dealed;
-    if (total_dealed >= size) {
+    total_parsed += current_parsed;
+    if (total_parsed >= size) {
       break;
     }
-    current_dealed = ParseTcpPacket(&data[total_dealed], size - total_dealed);
-    total_dealed += current_dealed;
+    current_parsed = ParseTcpPacket(&data[total_parsed], size - total_parsed);
+    total_parsed += current_parsed;
   }
   return true;
 }
@@ -256,54 +258,71 @@ bool TcpSocket::CalcPacketSize() {
     if (!header.Init(&current_header_[0], current_header_.size())) {
       return false;
     }
-    current_packet_size_ = header.packet_size();
+    current_packet_.size = header.packet_size();
     return true;
   }
   return false;
 }
 
-bool TcpSocket::ParseTcpHeader(const char* data, int size, int& dealed_size) {
+// parse until current_header_'s size reach to the tcp header size
+// if the header part is successfully parsed, calculate the packet part size, then reset packet part related member
+bool TcpSocket::ParseTcpHeader(const char* data, int size, int& parsed_size) {
   if (current_header_.size() < kTcpHeaderSize) {
     int left_header_size = kTcpHeaderSize - current_header_.size();
     if (left_header_size > size) {
       for (auto i = 0; i < size; ++i) {
         current_header_.push_back(data[i]);
       }
-      dealed_size = size;
+      parsed_size = size;
     } else {
       for (auto i = 0; i < left_header_size; ++i) {
         current_header_.push_back(data[i]);
       }
-      dealed_size = left_header_size;
-      current_packet_.clear();
+      parsed_size = left_header_size;
       if (!CalcPacketSize()) {
         return false;
       }
-      current_packet_.reserve(current_packet_size_);
+      current_packet_offset_ = 0;
     }
   }
   return true;
 }
 
 int TcpSocket::ParseTcpPacket(const char* data, int size) {
-  int left_packet_size = current_packet_size_ - current_packet_.size();
-  if (left_packet_size > 0) {
-    if (left_packet_size > size) {
-      for (auto i = 0; i < size; ++i) {
-        current_packet_.push_back(data[i]);
-      }
+  if (current_packet_offset_ == 0) {// packet part begin
+    if (current_packet_.size > size) {// packet part size bigger than data size
+      current_packet_.need_clear = true;
+      current_packet_.packet = new char[current_packet_.size];
+      memcpy(current_packet_.packet, data, size);
+      current_packet_offset_ += size;
       return size;
-    } else {
-      for (auto i = 0; i < left_packet_size; ++i) {
-        current_packet_.push_back(data[i]);
-      }
-      all_packets_.push_back(std::move(current_packet_));
-      current_packet_size_ = 0;
+    } else {// data is enough for packet part, generate a packet then push to all_packets_ and reset header part member 
+      current_packet_.need_clear = false;
+      current_packet_.packet = const_cast<char*>(data);
+      all_packets_.push_back(current_packet_);
       current_header_.clear();
-      return left_packet_size;
+      return current_packet_.size;
     }
+  } else {// continue with last packet
+    auto left_packet_size = current_packet_.size - current_packet_offset_;
+    if (left_packet_size > 0 && current_packet_.need_clear) {// assert: must be true
+      auto copy_begin = current_packet_.packet + current_packet_offset_;
+      if (left_packet_size > size) {
+        memcpy(copy_begin, data, size);
+        current_packet_offset_ += size;
+        return size;
+      } else {
+        memcpy(copy_begin, data, left_packet_size);
+        all_packets_.push_back(current_packet_);
+        current_packet_.need_clear = false;
+        current_header_.clear();
+        return left_packet_size;
+      }
+    } else {
+      LOG(kError, "parse tcp packet assert error.");
+    }
+    return 0;
   }
-  return 0;
 }
 
 } // namespace net

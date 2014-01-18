@@ -7,6 +7,9 @@
 #ifndef NET_INTERFACE_H_
 #define NET_INTERFACE_H_
 
+#include <memory>
+#include <string>
+
 namespace net {
 
 typedef unsigned long TcpHandle;
@@ -26,7 +29,7 @@ class NetInterface {
   virtual bool OnTcpAccepted(TcpHandle handle, TcpHandle accept_handle) = 0;
   virtual bool OnTcpReceived(TcpHandle handle, const char* packet, int size) = 0;
   virtual bool OnTcpError(TcpHandle handle, int error) = 0;
-  virtual bool OnUdpReceived(UdpHandle handle, const char* packet, int size, const char* ip, int port) = 0;
+  virtual bool OnUdpReceived(UdpHandle handle, const char* packet, int size, const std::string& ip, int port) = 0;
   virtual bool OnUdpError(UdpHandle handle, int error) = 0;
 };
 
@@ -38,16 +41,16 @@ class NetInterface {
 
 NET_API bool StartupNet();
 NET_API bool CleanupNet();
-NET_API bool TcpCreate(NetInterface* callback, const char* ip, int port, TcpHandle& new_handle);
+NET_API bool TcpCreate(NetInterface* callback, const std::string& ip, int port, TcpHandle& new_handle);
 NET_API bool TcpDestroy(TcpHandle handle);
 NET_API bool TcpListen(TcpHandle handle);
-NET_API bool TcpConnect(TcpHandle handle, const char* ip, int port);
-NET_API bool TcpSend(TcpHandle handle, const char* packet, int size);
+NET_API bool TcpConnect(TcpHandle handle, const std::string& ip, int port);
+NET_API bool TcpSend(TcpHandle handle, std::unique_ptr<char[]> packet, int size);
 NET_API bool TcpGetLocalAddr(TcpHandle handle, char ip[16], int& port);
 NET_API bool TcpGetRemoteAddr(TcpHandle handle, char ip[16], int& port);
-NET_API bool UdpCreate(NetInterface* callback, const char* ip, int port, UdpHandle& new_handle);
+NET_API bool UdpCreate(NetInterface* callback, const std::string& ip, int port, UdpHandle& new_handle);
 NET_API bool UdpDestroy(UdpHandle handle);
-NET_API bool UdpSendTo(UdpHandle handle, const char* packet, int size, const char* ip, int port);
+NET_API bool UdpSendTo(UdpHandle handle, std::unique_ptr<char[]> packet, int size, const std::string& ip, int port);
 
 } // namespace net
 
