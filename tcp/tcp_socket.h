@@ -1,6 +1,7 @@
 #ifndef NET_TCP_SOCKET_H_
 #define NET_TCP_SOCKET_H_
 
+#include "uncopyable.h"
 #include <string>
 #include <vector>
 #include <WinSock2.h>
@@ -10,15 +11,19 @@ namespace net {
 class NetInterface;
 class TcpHeader;
 
-class TcpSocket {
+class TcpSocket : public utility::Uncopyable {
  public:
   struct RecvPacket {
     char* packet;
     int size;
     bool need_clear;
-    ~RecvPacket() {
-      if (need_clear)
-        delete[] packet;
+    RecvPacket() : packet(nullptr), size(0), need_clear(false) {}
+    ~RecvPacket() { Clear(); }
+    void Clear() {
+      if (need_clear) delete[] packet;
+      packet = nullptr;
+      size = 0;
+      need_clear = false;
     }
   };
 
@@ -44,8 +49,6 @@ class TcpSocket {
   void OnRecvDone() { all_packets_.clear(); }
 
  private:
-  TcpSocket(const TcpSocket&) = delete;
-  TcpSocket& operator=(const TcpSocket&) = delete;
   void ResetMember();
   bool CalcPacketSize();
   bool ParseTcpHeader(const char* data, int size, int& parsed_size);

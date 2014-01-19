@@ -1,6 +1,7 @@
 #ifndef NET_IOCP_H_
 #define NET_IOCP_H_
 
+#include "uncopyable.h"
 #include <functional>
 #include <thread>
 #include <vector>
@@ -8,7 +9,7 @@
 
 namespace net {
 
-class IOCP {
+class IOCP : public utility::Uncopyable {
  public:
   IOCP();
   ~IOCP();
@@ -17,8 +18,6 @@ class IOCP {
   bool BindToIOCP(SOCKET socket);
 
  private:
-  IOCP(const IOCP&) = delete;
-  IOCP& operator=(const IOCP&) = delete;
   bool ThreadWorker();
 
  private:

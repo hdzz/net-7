@@ -1,6 +1,7 @@
 #ifndef NET_BASE_BUFFER_H_
 #define NET_BASE_BUFFER_H_
 
+#include "uncopyable.h"
 #include <WinSock2.h>
 
 namespace net {
@@ -11,7 +12,7 @@ const int kAsyncTypeTcpRecv = 3;
 const int kAsyncTypeUdpSend = 4;
 const int kAsyncTypeUdpRecv = 5;
 
-class BaseBuffer {
+class BaseBuffer : public utility::Uncopyable {
  public:
   BaseBuffer() { ResetBuffer(); }
   void ResetBuffer(){

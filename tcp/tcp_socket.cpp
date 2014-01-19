@@ -22,6 +22,7 @@ void TcpSocket::ResetMember() {
   listen_ = false;
   connect_ = false;
   current_header_.clear();
+  current_packet_.Clear();
   current_packet_offset_ = 0;
   all_packets_.clear();
 }

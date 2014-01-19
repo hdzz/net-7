@@ -8,18 +8,16 @@
 #include "udp_buffer.h"
 #include "udp_socket.h"
 #include "singleton.h"
+#include "uncopyable.h"
 #include <map>
 
 namespace net {
 
-class ResManager {
+class ResManager : public utility::Uncopyable {
  public:
   ResManager();
   ~ResManager();
 
-  /************************************************************************/
-  /* interface implementation                                             */
-  /************************************************************************/
   bool StartupNet();
   bool CleanupNet();
   bool TcpCreate(NetInterface* callback, const std::string& ip, int port, TcpHandle& new_handle);
@@ -34,9 +32,6 @@ class ResManager {
   bool UdpSendTo(UdpHandle handle, std::unique_ptr<char[]> packet, int size, const std::string& ip, int port);
 
  private:
-  ResManager(const ResManager&) = delete;	// singleton: can not be copied nor assigned
-  ResManager& operator=(const ResManager&) = delete;
-
   bool NewTcpSocket(TcpHandle& new_handle, const std::shared_ptr<TcpSocket>& new_socket);
   bool NewUdpSocket(TcpHandle& new_handle, const std::shared_ptr<UdpSocket>& new_socket);
   void RemoveTcpSocket(TcpHandle handle);

@@ -1,6 +1,7 @@
 #ifndef NET_UDP_SOCKET_H_
 #define NET_UDP_SOCKET_H_
 
+#include "uncopyable.h"
 #include <string>
 #include <WinSock2.h>
 
@@ -8,7 +9,7 @@ namespace net {
 
 class NetInterface;
 
-class UdpSocket {
+class UdpSocket : public utility::Uncopyable {
  public:
   UdpSocket();
   ~UdpSocket();
@@ -21,10 +22,6 @@ class UdpSocket {
 
   SOCKET socket() { return socket_; }
   NetInterface* callback() { return callback_; }
-
- private:
-  UdpSocket(const UdpSocket&) = delete;
-  UdpSocket& operator=(const UdpSocket&) = delete;
 
  private:
   NetInterface* callback_;
